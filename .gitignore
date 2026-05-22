@@ -5,3 +5,8 @@ Thumbs.db
 # Editor
 *.swp
 .vscode/
+
+# Test artifacts
+.playwright-mcp/
+*.png
+.claude/settings.local.json

@@ -17,6 +17,9 @@
   #turn { margin-top: 10px; font-size: 17px; font-weight: 700; }
   #instruction { margin-top: 4px; font-size: 13px; opacity: .72; max-width: 250px;
     line-height: 1.4; }
+  #hint { margin-top: 4px; font-size: 13px; color: #8899bb; min-height: 18px;
+    transition: opacity 0.3s; opacity: 0; }
+  #hint.visible { opacity: 1; }
   #legend { margin-top: 10px; font-size: 12px; opacity: .8; }
 
   #controls { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -32,6 +35,27 @@
     background: #4c93ff; color: #fff; font-weight: 700; cursor: pointer; font-size: 14px; }
   #newGame:hover, #bannerNew:hover { background: #6aa8ff; }
 
+  /* ---- mode selector overlay ---- */
+  #modeSelector { position: fixed; inset: 0; z-index: 25; display: flex;
+    align-items: center; justify-content: center;
+    background: rgba(7,8,11,.85); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+  #modePanel { background: #1a1d24; border-radius: 18px; padding: 32px 36px;
+    display: flex; flex-direction: column; align-items: center; gap: 18px; min-width: 290px; }
+  #modeTitle { font-size: 22px; font-weight: 800; letter-spacing: .5px; }
+  #modeButtons { display: flex; gap: 12px; }
+  #modeButtons button { padding: 11px 22px; border: 0; border-radius: 10px; font-size: 15px;
+    font-weight: 700; cursor: pointer; background: #3a3f4b; color: #fff; transition: background .12s; }
+  #modeButtons button:hover { background: #4c93ff; }
+  #diffRow { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .dbtn { padding: 7px 14px; border: 0; border-radius: 8px; background: #2d3038;
+    color: #aaa; font-size: 13px; font-weight: 700; cursor: pointer; transition: background .12s, color .12s; }
+  .dbtn.active { background: #4c93ff; color: #fff; }
+  .dbtn:hover:not(.active) { background: #3a3f4b; color: #e8e8ec; }
+  #btnStart { padding: 11px 26px; border: 0; border-radius: 10px; background: #4c93ff;
+    color: #fff; font-weight: 700; cursor: pointer; font-size: 15px; transition: background .12s; }
+  #btnStart:hover { background: #6aa8ff; }
+
+  /* ---- game-over banner ---- */
   #banner { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 20px;
     background: rgba(7,8,11,.8); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
@@ -48,13 +72,31 @@
     <div id="title">CUBE TAC TOE</div>
     <div id="turn"></div>
     <div id="instruction"></div>
-    <div id="legend">Player 1 = <span class="xcol">X</span> &nbsp;·&nbsp;
-      Player 2 = <span class="ocol">O</span></div>
+    <div id="hint"></div>
+    <div id="legend"></div>
   </div>
 
   <div id="controls">
     <div id="moveButtons"></div>
     <button id="newGame">New Game</button>
+  </div>
+
+  <!-- mode selector (shown on New Game / first load) -->
+  <div id="modeSelector" class="hidden">
+    <div id="modePanel">
+      <div id="modeTitle">New Game</div>
+      <div id="modeButtons">
+        <button id="btn2p">2 Players</button>
+        <button id="btnAI">vs Computer</button>
+      </div>
+      <div id="diffRow" class="hidden">
+        <span>Difficulty:</span>
+        <button class="dbtn" data-d="easy">Easy</button>
+        <button class="dbtn active" data-d="medium">Medium</button>
+        <button class="dbtn" data-d="hard">Hard</button>
+      </div>
+      <button id="btnStart" class="hidden">Start</button>
+    </div>
   </div>
 
   <div id="banner" class="hidden">
@@ -73,25 +115,20 @@ import * as THREE from 'three';
 /* ============================================================
    Constants
    ============================================================ */
-const SPACING   = 1.0;          // distance between cubie centres
-const CUBIE     = 0.95;         // cubie body edge length
-const STICKER   = 0.82;         // sticker square edge length
+const SPACING   = 1.0;
+const CUBIE     = 0.95;
+const STICKER   = 0.82;
 const ST_OFFSET = CUBIE / 2 + 0.001;
 const X_COLOR   = 0x5aa8ff;
 const O_COLOR   = 0xff9a3c;
 const HALF_PI   = Math.PI / 2;
 
-/* The 8 tic-tac-toe lines on a 3x3 face, as [row,col] index triples. */
 const LINES = [
   [[0,0],[0,1],[0,2]], [[1,0],[1,1],[1,2]], [[2,0],[2,1],[2,2]],
   [[0,0],[1,0],[2,0]], [[0,1],[1,1],[2,1]], [[0,2],[1,2],[2,2]],
   [[0,0],[1,1],[2,2]], [[0,2],[1,1],[2,0]],
 ];
-
-/* The 6 world face directions. */
 const FACES = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
-
-/* The 12 standard quarter-turn moves: [label, axis, layer, dirSign]. */
 const MOVES = [
   ["U","y", 1,-1], ["U'","y", 1, 1], ["D","y",-1, 1], ["D'","y",-1,-1],
   ["R","x", 1,-1], ["R'","x", 1, 1], ["L","x",-1, 1], ["L'","x",-1,-1],
@@ -99,31 +136,24 @@ const MOVES = [
 ];
 
 /* ============================================================
-   Integer 3x3 matrix maths (logical model — exact, no drift)
+   Integer 3x3 matrix maths
    ============================================================ */
 const AXIS_INDEX = { x: 0, y: 1, z: 2 };
-
-// Right-hand-rule +90deg rotation matrices about each positive axis.
 const ROT_POS = {
   x: [[1,0,0],[0,0,-1],[0,1,0]],
   y: [[0,0,1],[0,1,0],[-1,0,0]],
   z: [[0,-1,0],[1,0,0],[0,0,1]],
 };
-
 function transpose(m) {
   return [[m[0][0],m[1][0],m[2][0]],
           [m[0][1],m[1][1],m[2][1]],
           [m[0][2],m[1][2],m[2][2]]];
 }
-function rotMatrix(axis, sign) {
-  return sign > 0 ? ROT_POS[axis] : transpose(ROT_POS[axis]);
-}
+function rotMatrix(axis, sign) { return sign > 0 ? ROT_POS[axis] : transpose(ROT_POS[axis]); }
 function matVec(m, v) {
-  return [
-    m[0][0]*v[0] + m[0][1]*v[1] + m[0][2]*v[2],
-    m[1][0]*v[0] + m[1][1]*v[1] + m[1][2]*v[2],
-    m[2][0]*v[0] + m[2][1]*v[1] + m[2][2]*v[2],
-  ];
+  return [m[0][0]*v[0]+m[0][1]*v[1]+m[0][2]*v[2],
+          m[1][0]*v[0]+m[1][1]*v[1]+m[1][2]*v[2],
+          m[2][0]*v[0]+m[2][1]*v[1]+m[2][2]*v[2]];
 }
 function matMul(a, b) {
   const r = [[0,0,0],[0,0,0],[0,0,0]];
@@ -138,7 +168,7 @@ function cross(a, b) {
 const IDENTITY = () => [[1,0,0],[0,1,0],[0,0,1]];
 
 /* ============================================================
-   Three.js scene setup
+   Three.js scene
    ============================================================ */
 const scene    = new THREE.Scene();
 const camera   = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
@@ -156,7 +186,6 @@ scene.add(key, fill, rim);
 const cube = new THREE.Group();
 scene.add(cube);
 
-/* ---- camera orbit (spherical) ---- */
 let camTheta = Math.PI * 0.25;
 let camPhi   = Math.PI * 0.30;
 let camR     = 8.4;
@@ -187,62 +216,58 @@ function roundedRectShape(size, radius) {
   s.lineTo(x,     y+r);        s.quadraticCurveTo(x,   y,     x+r,   y);
   return s;
 }
-const stickerGeo = new THREE.ShapeGeometry(roundedRectShape(STICKER, 0.14));
-const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const stickerGeo  = new THREE.ShapeGeometry(roundedRectShape(STICKER, 0.14));
+const Z_AXIS      = new THREE.Vector3(0, 0, 1);
 
-const cubies       = [];   // { pos, rot, group, solvedPos }
-const allStickers  = [];   // { cubie, localNormal, mark, mesh, glyph }
-const stickerMeshes = [];  // raycast targets
+const cubies        = [];
+const allStickers   = [];
+const stickerMeshes = [];
 
 for (let x = -1; x <= 1; x++)
 for (let y = -1; y <= 1; y++)
 for (let z = -1; z <= 1; z++) {
-  if (x === 0 && y === 0 && z === 0) continue;     // hidden core
-
+  if (x === 0 && y === 0 && z === 0) continue;
   const group = new THREE.Group();
   group.position.set(x*SPACING, y*SPACING, z*SPACING);
-  const body = new THREE.Mesh(bodyGeo, bodyMat);
-  group.add(body);
+  group.add(new THREE.Mesh(bodyGeo, bodyMat));
 
   const cubie = { pos: [x,y,z], rot: IDENTITY(), group, solvedPos: [x,y,z] };
 
-  const pos = [x, y, z];
   for (let axis = 0; axis < 3; axis++) {
-    if (pos[axis] === 0) continue;                 // not an exterior face
-    const normal = [0,0,0];
-    normal[axis] = pos[axis];
-
+    if ([x,y,z][axis] === 0) continue;
+    const normal = [0,0,0]; normal[axis] = [x,y,z][axis];
     const mat = new THREE.MeshStandardMaterial({
       color: 0xf2f2f2, roughness: 0.6, metalness: 0.0,
       emissive: 0x000000, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(stickerGeo, mat);
     mesh.position.set(normal[0]*ST_OFFSET, normal[1]*ST_OFFSET, normal[2]*ST_OFFSET);
-    mesh.quaternion.setFromUnitVectors(Z_AXIS,
-      new THREE.Vector3(normal[0], normal[1], normal[2]));
+    mesh.quaternion.setFromUnitVectors(Z_AXIS, new THREE.Vector3(...normal));
     group.add(mesh);
-
     const sticker = { cubie, localNormal: normal, mark: null, mesh, glyph: null };
     mesh.userData.sticker = sticker;
     allStickers.push(sticker);
     stickerMeshes.push(mesh);
   }
-
-  cubie.bodyMesh = body;
   cubies.push(cubie);
   cube.add(group);
 }
 
-/* ---- mark glyphs ---- */
+/* Lookup table — fixed indices, built once after cube is fully constructed */
+const stickersInfo = allStickers.map(s => ({
+  cubieIndex: cubies.indexOf(s.cubie),
+  localNormal: s.localNormal,
+}));
+
+/* ---- glyphs ---- */
 function makeGlyph(mark) {
   const g = new THREE.Group();
   const color = mark === 'X' ? X_COLOR : O_COLOR;
-  const mat = new THREE.MeshStandardMaterial({
-    color, emissive: color, emissiveIntensity: 0.45, roughness: 0.4, metalness: 0.1 });
+  const mat = new THREE.MeshStandardMaterial(
+    { color, emissive: color, emissiveIntensity: 0.45, roughness: 0.4, metalness: 0.1 });
   if (mark === 'X') {
     for (const ang of [Math.PI/4, -Math.PI/4]) {
       const bar = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.13, 0.07), mat);
-      bar.rotation.z = ang;
-      g.add(bar);
+      bar.rotation.z = ang; g.add(bar);
     }
   } else {
     g.add(new THREE.Mesh(new THREE.TorusGeometry(0.21, 0.065, 16, 40), mat));
@@ -251,25 +276,222 @@ function makeGlyph(mark) {
   return g;
 }
 
-/* ---- keep the Three.js mesh in sync with the integer model ---- */
+/* ---- sync mesh from integer model ---- */
 const _m4 = new THREE.Matrix4();
 function syncCubie(c) {
   c.group.position.set(c.pos[0]*SPACING, c.pos[1]*SPACING, c.pos[2]*SPACING);
   const r = c.rot;
-  _m4.set(r[0][0], r[0][1], r[0][2], 0,
-          r[1][0], r[1][1], r[1][2], 0,
-          r[2][0], r[2][1], r[2][2], 0,
-          0, 0, 0, 1);
+  _m4.set(r[0][0],r[0][1],r[0][2],0, r[1][0],r[1][1],r[1][2],0,
+          r[2][0],r[2][1],r[2][2],0, 0,0,0,1);
   c.group.quaternion.setFromRotationMatrix(_m4);
+}
+
+/* ============================================================
+   Rules core — pure logical state (for AI simulation)
+   ============================================================ */
+function snapshotState() {
+  return {
+    posArr: cubies.map(c => c.pos.slice()),
+    rotArr:  cubies.map(c => c.rot.map(row => row.slice())),
+    marks:   allStickers.map(s => s.mark),
+  };
+}
+function cloneState(s) {
+  return {
+    posArr: s.posArr.map(p => p.slice()),
+    rotArr:  s.rotArr.map(r => r.map(row => row.slice())),
+    marks:   s.marks.slice(),
+  };
+}
+function applyMoveLogical(s, axis, layer, angle) {
+  const ai = AXIS_INDEX[axis];
+  const M  = rotMatrix(axis, angle > 0 ? 1 : -1);
+  for (let i = 0; i < cubies.length; i++) {
+    if (s.posArr[i][ai] !== layer) continue;
+    s.posArr[i] = matVec(M, s.posArr[i]);
+    s.rotArr[i]  = matMul(M, s.rotArr[i]);
+  }
+}
+function detectWinnersLogical(s) {
+  const winners = new Set();
+  for (const d of FACES) {
+    const ai = d[0] !== 0 ? 0 : d[1] !== 0 ? 1 : 2;
+    const [u, v] = ai === 0 ? [1,2] : ai === 1 ? [0,2] : [0,1];
+    const grid = [[null,null,null],[null,null,null],[null,null,null]];
+    for (let i = 0; i < stickersInfo.length; i++) {
+      const ci = stickersInfo[i].cubieIndex;
+      const ln = stickersInfo[i].localNormal;
+      const wn = matVec(s.rotArr[ci], ln);
+      if (wn[0]===d[0] && wn[1]===d[1] && wn[2]===d[2])
+        grid[s.posArr[ci][v]+1][s.posArr[ci][u]+1] = s.marks[i];
+    }
+    for (const [a,b,c] of LINES) {
+      const m = grid[a[0]][a[1]];
+      if (m && grid[b[0]][b[1]]===m && grid[c[0]][c[1]]===m) winners.add(m);
+    }
+  }
+  return winners;
+}
+function listEmptyStickers(s) {
+  return s.marks.reduce((out, m, i) => { if (!m) out.push(i); return out; }, []);
+}
+
+/* ============================================================
+   AI scoring
+   ============================================================ */
+function scoreState(s, aiMark, oppMark) {
+  const winners = detectWinnersLogical(s);
+  const aiWins  = winners.has(aiMark);
+  const oppWins = winners.has(oppMark);
+  if (aiWins  && !oppWins) return { score: 10000, reason: 'Going for the win!' };
+  if (oppWins && !aiWins)  return { score: -10000, reason: '' };
+  if (aiWins  &&  oppWins) return { score: 0, reason: '' };
+
+  let score = 0;
+  for (const d of FACES) {
+    const ai = d[0] !== 0 ? 0 : d[1] !== 0 ? 1 : 2;
+    const [u, v] = ai === 0 ? [1,2] : ai === 1 ? [0,2] : [0,1];
+    const grid = [[null,null,null],[null,null,null],[null,null,null]];
+    for (let i = 0; i < stickersInfo.length; i++) {
+      const ci = stickersInfo[i].cubieIndex;
+      const ln = stickersInfo[i].localNormal;
+      const wn = matVec(s.rotArr[ci], ln);
+      if (wn[0]===d[0] && wn[1]===d[1] && wn[2]===d[2])
+        grid[s.posArr[ci][v]+1][s.posArr[ci][u]+1] = s.marks[i];
+    }
+    for (const [a,b,c] of LINES) {
+      const cells = [grid[a[0]][a[1]], grid[b[0]][b[1]], grid[c[0]][c[1]]];
+      const nAI  = cells.filter(x => x === aiMark).length;
+      const nOpp = cells.filter(x => x === oppMark).length;
+      if (nAI > 0 && nOpp > 0) continue;
+      if (nAI  === 2) score += 3;
+      if (nAI  === 1) score += 1;
+      if (nOpp === 2) score -= 3;
+      if (nOpp === 1) score -= 1;
+    }
+  }
+  return { score, reason: score >= 0 ? 'Building a threat' : 'Blocking a line' };
+}
+
+/* ============================================================
+   AI difficulty policies
+   ============================================================ */
+function chooseTurn(snap, aiMark, oppMark, difficulty) {
+  const emptyIdx = listEmptyStickers(snap);
+  if (emptyIdx.length === 0) return null;
+
+  const candidates = [];
+  for (const si of emptyIdx) {
+    for (const [, axis, layer, dir] of MOVES) {
+      const angle = dir * HALF_PI;
+      const clone = cloneState(snap);
+      clone.marks[si] = aiMark;
+      applyMoveLogical(clone, axis, layer, angle);
+      const { score, reason } = scoreState(clone, aiMark, oppMark);
+      candidates.push({ stickerIndex: si, move: [axis, layer, angle], score, reason });
+    }
+  }
+
+  const winning = candidates.filter(c => c.score ===  10000);
+  const losing  = candidates.filter(c => c.score === -10000);
+  const neutral = candidates.filter(c => c.score > -10000 && c.score < 10000);
+
+  // fallback chain: prefer neutral, then winning (if we're somehow here), then losing
+  const safePool = neutral.length ? neutral : (winning.length ? winning : losing);
+
+  /* ---- Easy ---- */
+  if (difficulty === 'easy') {
+    // Only consider winning 33 % of the time when neutral options exist
+    if (winning.length && Math.random() < 0.33) {
+      return { ...winning[Math.floor(Math.random() * winning.length)], reason: 'Going for the win!' };
+    }
+    const pool = neutral.length ? neutral : (winning.length ? winning : losing);
+    return { ...pool[Math.floor(Math.random() * pool.length)], reason: '' };
+  }
+
+  /* ---- Medium ---- */
+  if (difficulty === 'medium') {
+    if (winning.length) return { ...winning[0], reason: 'Going for the win!' };
+    if (safePool.length === 0) return candidates[0];
+    const scored = safePool.map(c => ({ ...c, ns: c.score + (Math.random()*10 - 5) }));
+    scored.sort((a, b) => b.ns - a.ns);
+    return scored[0];
+  }
+
+  /* ---- Hard: 2-ply lookahead on top-15 neutral candidates ---- */
+  if (winning.length) return { ...winning[0], reason: 'Going for the win!' };
+  if (safePool.length === 0) return candidates[0];
+
+  const top15 = [...safePool].sort((a, b) => b.score - a.score).slice(0, 15);
+  let bestMetric = -Infinity;
+  let bestCand   = top15[0];
+
+  for (const cand of top15) {
+    const afterAI = cloneState(snap);
+    afterAI.marks[cand.stickerIndex] = aiMark;
+    applyMoveLogical(afterAI, cand.move[0], cand.move[1], cand.move[2]);
+
+    const oppEmpty = listEmptyStickers(afterAI);
+    let oppBest = -Infinity;
+    for (const osi of oppEmpty.slice(0, 15)) {
+      for (const [, axis, layer, dir] of MOVES) {
+        const angle = dir * HALF_PI;
+        const c2 = cloneState(afterAI);
+        c2.marks[osi] = oppMark;
+        applyMoveLogical(c2, axis, layer, angle);
+        const { score } = scoreState(c2, oppMark, aiMark);
+        if (score > oppBest) oppBest = score;
+      }
+    }
+    const metric = -oppBest;
+    if (metric > bestMetric) { bestMetric = metric; bestCand = cand; }
+  }
+  return { ...bestCand, reason: 'Playing it safe' };
+}
+
+/* ============================================================
+   AI turn execution
+   ============================================================ */
+let _gameGen = 0;   // incremented each startGame; lets aiTakeTurn abort if game reset
+
+async function aiTakeTurn() {
+  const gen     = _gameGen;
+  const aiMark  = aiPlayer === 1 ? 'X' : 'O';
+  const oppMark = aiPlayer === 1 ? 'O' : 'X';
+
+  const snap   = snapshotState();
+  const choice = chooseTurn(snap, aiMark, oppMark, aiDifficulty);
+  if (!choice) return;
+
+  await new Promise(r => setTimeout(r, 700));
+  if (_gameGen !== gen) return;
+
+  // Place mark directly (keep state = AI_THINKING; don't call placeMark wrapper)
+  const sticker = allStickers[choice.stickerIndex];
+  sticker.mark  = aiMark;
+  const glyph   = makeGlyph(aiMark);
+  sticker.mesh.add(glyph);
+  sticker.glyph = glyph;
+
+  showHint(choice.reason);
+
+  await new Promise(r => setTimeout(r, 500));
+  if (_gameGen !== gen) return;
+
+  applyMove(choice.move[0], choice.move[1], choice.move[2], resolveTurn);
 }
 
 /* ============================================================
    Game state
    ============================================================ */
-let state = 'PLACE';          // PLACE | MOVE | ANIMATING | GAMEOVER
-let currentPlayer = 1;        // 1 = X, 2 = O
-let animating = false;
-let activeAnim = null;
+let state         = 'PLACE';   // PLACE | MOVE | ANIMATING | AI_THINKING | GAMEOVER
+let currentPlayer = 1;
+let animating     = false;
+let activeAnim    = null;
+let gameMode      = 'human';   // 'human' | 'ai'
+let aiDifficulty  = 'medium';  // 'easy' | 'medium' | 'hard'
+let aiPlayer      = 2;         // which player number the AI controls
+let _aiTimer      = null;      // handle for the initial AI kick-off timeout
 
 const currentMark = () => (currentPlayer === 1 ? 'X' : 'O');
 
@@ -279,38 +501,31 @@ const currentMark = () => (currentPlayer === 1 ? 'X' : 'O');
 function easeInOut(t) {
   return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
 }
-
 function applyMove(axis, layer, angle, onDone) {
   if (animating) return false;
   const ai = AXIS_INDEX[axis];
   const layerCubies = cubies.filter(c => c.pos[ai] === layer);
-
   const pivot = new THREE.Group();
   cube.add(pivot);
   for (const c of layerCubies) pivot.attach(c.group);
-
-  animating = true;
-  activeAnim = { pivot, axis, angle, layerCubies, onDone,
-                 start: performance.now(), dur: 300 };
+  animating  = true;
+  activeAnim = { pivot, axis, angle, layerCubies, onDone, start: performance.now(), dur: 300 };
   return true;
 }
-
 function finishMove() {
   const { pivot, axis, angle, layerCubies, onDone } = activeAnim;
   const M = rotMatrix(axis, angle > 0 ? 1 : -1);
   for (const c of layerCubies) {
-    cube.add(c.group);                  // reparent out of pivot
-    c.pos = matVec(M, c.pos);           // update logical model
+    cube.add(c.group);
+    c.pos = matVec(M, c.pos);
     c.rot = matMul(M, c.rot);
-    syncCubie(c);                       // hard-set mesh from model (no drift)
+    syncCubie(c);
   }
   cube.remove(pivot);
   activeAnim = null;
-  animating = false;
+  animating  = false;
   if (onDone) onDone();
 }
-
-/* Funnels every move (button or drag) into one place. */
 function doMove(axis, layer, angle) {
   if (state !== 'MOVE' || animating) return;
   state = 'ANIMATING';
@@ -319,7 +534,7 @@ function doMove(axis, layer, angle) {
 }
 
 /* ============================================================
-   Win / draw detection — runs only after a completed move
+   Win / draw detection
    ============================================================ */
 function detectWinners() {
   const winners = new Set();
@@ -327,19 +542,23 @@ function detectWinners() {
     const ai = d[0] !== 0 ? 0 : d[1] !== 0 ? 1 : 2;
     const [u, v] = ai === 0 ? [1,2] : ai === 1 ? [0,2] : [0,1];
     const grid = [[null,null,null],[null,null,null],[null,null,null]];
-
     for (const s of allStickers) {
       const wn = matVec(s.cubie.rot, s.localNormal);
-      if (wn[0] === d[0] && wn[1] === d[1] && wn[2] === d[2]) {
-        grid[s.cubie.pos[v] + 1][s.cubie.pos[u] + 1] = s.mark;
-      }
+      if (wn[0]===d[0] && wn[1]===d[1] && wn[2]===d[2])
+        grid[s.cubie.pos[v]+1][s.cubie.pos[u]+1] = s.mark;
     }
-    for (const [a, b, c] of LINES) {
+    for (const [a,b,c] of LINES) {
       const m = grid[a[0]][a[1]];
-      if (m && grid[b[0]][b[1]] === m && grid[c[0]][c[1]] === m) winners.add(m);
+      if (m && grid[b[0]][b[1]]===m && grid[c[0]][c[1]]===m) winners.add(m);
     }
   }
   return winners;
+}
+
+function playerLabel(p) {
+  if (gameMode === 'ai' && p === aiPlayer)  return 'Computer';
+  if (gameMode === 'ai')                    return 'You';
+  return `Player ${p}`;
 }
 
 function resolveTurn() {
@@ -349,9 +568,11 @@ function resolveTurn() {
   if (winners.has('X') && winners.has('O')) {
     result = { text: "It's a Draw", sub: 'Both players completed a line on the same move' };
   } else if (winners.has('X')) {
-    result = { text: 'Player 1 (X) Wins!', cls: 'xcol' };
+    const lbl = playerLabel(1);
+    result = { text: `${lbl} (X) ${lbl === 'You' ? 'Win' : 'Wins'}!`, cls: 'xcol' };
   } else if (winners.has('O')) {
-    result = { text: 'Player 2 (O) Wins!', cls: 'ocol' };
+    const lbl = playerLabel(2);
+    result = { text: `${lbl} (O) ${lbl === 'You' ? 'Win' : 'Wins'}!`, cls: 'ocol' };
   } else if (allStickers.every(s => s.mark)) {
     result = { text: "It's a Draw", sub: 'Every sticker is filled with no line' };
   }
@@ -359,19 +580,30 @@ function resolveTurn() {
   if (result) {
     state = 'GAMEOVER';
     showBanner(result);
-  } else {
-    currentPlayer = currentPlayer === 1 ? 2 : 1;
-    state = 'PLACE';
+    updateUI();
+    return;
   }
+
+  currentPlayer = currentPlayer === 1 ? 2 : 1;
+
+  // If the next player is the AI, hand off to aiTakeTurn
+  if (gameMode === 'ai' && currentPlayer === aiPlayer) {
+    state = 'AI_THINKING';
+    updateUI();
+    aiTakeTurn();
+    return;
+  }
+
+  state = 'PLACE';
   updateUI();
 }
 
 /* ============================================================
-   Placing marks
+   Placing marks (human path only)
    ============================================================ */
 function placeMark(sticker) {
   sticker.mark = currentMark();
-  const glyph = makeGlyph(sticker.mark);
+  const glyph  = makeGlyph(sticker.mark);
   sticker.mesh.add(glyph);
   sticker.glyph = glyph;
   clearHover();
@@ -383,7 +615,7 @@ function placeMark(sticker) {
    Pointer input — orbit, place, drag-to-turn
    ============================================================ */
 const raycaster = new THREE.Raycaster();
-const ndc = new THREE.Vector2();
+const ndc       = new THREE.Vector2();
 
 function raycastSticker(e) {
   ndc.set((e.clientX/innerWidth)*2 - 1, -(e.clientY/innerHeight)*2 + 1);
@@ -399,19 +631,14 @@ renderer.domElement.addEventListener('pointerdown', e => {
   ptr.down = true;
   ptr.startX = ptr.lastX = e.clientX;
   ptr.startY = ptr.lastY = e.clientY;
-  ptr.classified = false;
-  ptr.gesture = null;
+  ptr.classified = false; ptr.gesture = null;
   ptr.hitSticker = raycastSticker(e);
   renderer.domElement.setPointerCapture(e.pointerId);
 });
-
 renderer.domElement.addEventListener('pointermove', e => {
   if (!ptr.down) { handleHover(e); return; }
-
-  const dx = e.clientX - ptr.startX;
-  const dy = e.clientY - ptr.startY;
+  const dx = e.clientX - ptr.startX, dy = e.clientY - ptr.startY;
   const dist = Math.hypot(dx, dy);
-
   if (!ptr.classified && dist > 8) {
     ptr.classified = true;
     if (state === 'MOVE' && ptr.hitSticker && !animating) {
@@ -421,7 +648,6 @@ renderer.domElement.addEventListener('pointermove', e => {
       ptr.lastX = e.clientX; ptr.lastY = e.clientY;
     }
   }
-
   if (ptr.gesture === 'orbit') {
     camTheta -= (e.clientX - ptr.lastX) * 0.0095;
     camPhi   -= (e.clientY - ptr.lastY) * 0.0095;
@@ -433,36 +659,29 @@ renderer.domElement.addEventListener('pointermove', e => {
     if (mv) doMove(mv.axis, mv.layer, mv.angle);
   }
 });
-
 function endPointer() {
   if (ptr.down && !ptr.classified && ptr.hitSticker &&
       state === 'PLACE' && !ptr.hitSticker.mark && !animating) {
     placeMark(ptr.hitSticker);
   }
-  ptr.down = false;
-  ptr.gesture = null;
-  ptr.classified = false;
+  ptr.down = false; ptr.gesture = null; ptr.classified = false;
 }
 renderer.domElement.addEventListener('pointerup', endPointer);
 renderer.domElement.addEventListener('pointercancel', () => {
   ptr.down = false; ptr.gesture = null; ptr.classified = false;
 });
-
 renderer.domElement.addEventListener('wheel', e => {
-  camR += e.deltaY * 0.0045;
-  updateCamera();
+  camR += e.deltaY * 0.0045; updateCamera();
 }, { passive: true });
 
-/* ---- translate a face drag into a standard move ---- */
 function screenDir(v) {
-  const p0 = new THREE.Vector3(0, 0, 0).project(camera);
-  const p1 = new THREE.Vector3(v[0], v[1], v[2]).project(camera);
-  return [ (p1.x - p0.x) * innerWidth/2, -(p1.y - p0.y) * innerHeight/2 ];
+  const p0 = new THREE.Vector3(0,0,0).project(camera);
+  const p1 = new THREE.Vector3(v[0],v[1],v[2]).project(camera);
+  return [(p1.x-p0.x)*innerWidth/2, -(p1.y-p0.y)*innerHeight/2];
 }
 function resolveDragMove(sticker, dx, dy) {
-  const n = matVec(sticker.cubie.rot, sticker.localNormal);   // face normal (world)
+  const n = matVec(sticker.cubie.rot, sticker.localNormal);
   const nAxis = n[0] !== 0 ? 0 : n[1] !== 0 ? 1 : 2;
-
   let best = null;
   for (let i = 0; i < 3; i++) {
     if (i === nAxis) continue;
@@ -472,22 +691,15 @@ function resolveDragMove(sticker, dx, dy) {
     if (!best || Math.abs(score) > Math.abs(best.score)) best = { cand, score };
   }
   if (!best) return null;
-
   const s = best.score >= 0 ? 1 : -1;
-  const k = cross(n, best.cand);                              // rotation axis (world)
+  const k = cross(n, best.cand);
   const kAxis = k[0] !== 0 ? 0 : k[1] !== 0 ? 1 : 2;
   const kSign = k[kAxis];
   const layer = sticker.cubie.pos[kAxis];
-  if (layer === 0) return null;                               // slice move — not standard
-
-  return {
-    axis: ['x','y','z'][kAxis],
-    layer,
-    angle: s * kSign * HALF_PI,
-  };
+  if (layer === 0) return null;
+  return { axis: ['x','y','z'][kAxis], layer, angle: s * kSign * HALF_PI };
 }
 
-/* ---- hover highlight for placeable stickers ---- */
 let hovered = null;
 function clearHover() {
   if (hovered) { hovered.mesh.material.emissive.setHex(0x000000); hovered = null; }
@@ -507,10 +719,24 @@ function handleHover(e) {
 }
 
 /* ============================================================
+   Reasoning hint
+   ============================================================ */
+let _hintTimer = null;
+function showHint(text, duration = 1800) {
+  const el = document.getElementById('hint');
+  if (!text) { el.classList.remove('visible'); return; }
+  el.textContent = text;
+  el.classList.add('visible');
+  clearTimeout(_hintTimer);
+  _hintTimer = setTimeout(() => el.classList.remove('visible'), duration);
+}
+
+/* ============================================================
    UI / HUD
    ============================================================ */
 const turnEl    = document.getElementById('turn');
 const instrEl   = document.getElementById('instruction');
+const legendEl  = document.getElementById('legend');
 const bannerEl  = document.getElementById('banner');
 const bannerTxt = document.getElementById('bannerText');
 const bannerSub = document.getElementById('bannerSub');
@@ -519,29 +745,44 @@ const moveBtns  = [];
 const moveBox = document.getElementById('moveButtons');
 for (const [label, axis, layer, dir] of MOVES) {
   const b = document.createElement('button');
-  b.className = 'mbtn';
-  b.textContent = label;
+  b.className = 'mbtn'; b.textContent = label;
   b.addEventListener('click', () => doMove(axis, layer, dir * HALF_PI));
-  moveBox.appendChild(b);
-  moveBtns.push(b);
+  moveBox.appendChild(b); moveBtns.push(b);
 }
 
 function updateUI() {
-  const mark = currentMark();
-  const cls  = currentPlayer === 1 ? 'xcol' : 'ocol';
-  turnEl.innerHTML = `Player ${currentPlayer} <span class="${cls}">(${mark})</span>`;
+  const mark  = currentMark();
+  const cls   = currentPlayer === 1 ? 'xcol' : 'ocol';
+  const isAI  = gameMode === 'ai' && currentPlayer === aiPlayer;
+  const label = isAI ? 'Computer' : `Player ${currentPlayer}`;
+  turnEl.innerHTML = `${label} <span class="${cls}">(${mark})</span>`;
 
   if (state === 'PLACE')
-    instrEl.textContent = 'Tap an empty sticker to place your mark. Drag empty space to rotate the cube.';
+    instrEl.textContent = 'Tap an empty sticker to place your mark. Drag to inspect the cube.';
   else if (state === 'MOVE')
-    instrEl.textContent = 'Now make one cube move — drag a face, or use a button below.';
+    instrEl.textContent = 'Make one cube move — drag a face, or use a button below.';
   else if (state === 'ANIMATING')
     instrEl.textContent = 'Turning…';
+  else if (state === 'AI_THINKING')
+    instrEl.textContent = 'Computer is thinking…';
   else
     instrEl.textContent = '';
 
   const enabled = (state === 'MOVE');
   for (const b of moveBtns) b.disabled = !enabled;
+
+  // Legend
+  if (gameMode === 'ai') {
+    const hMark = aiPlayer === 1 ? 'O' : 'X';
+    const cMark = aiPlayer === 1 ? 'X' : 'O';
+    const hCls  = hMark === 'X' ? 'xcol' : 'ocol';
+    const cCls  = cMark === 'X' ? 'xcol' : 'ocol';
+    legendEl.innerHTML =
+      `You = <span class="${hCls}">${hMark}</span> &nbsp;·&nbsp; Computer = <span class="${cCls}">${cMark}</span>`;
+  } else {
+    legendEl.innerHTML =
+      `Player 1 = <span class="xcol">X</span> &nbsp;·&nbsp; Player 2 = <span class="ocol">O</span>`;
+  }
 }
 
 function showBanner(result) {
@@ -552,9 +793,34 @@ function showBanner(result) {
 }
 
 /* ============================================================
-   New game
+   Mode selector
    ============================================================ */
-function newGame() {
+const modeSelectorEl = document.getElementById('modeSelector');
+const diffRowEl      = document.getElementById('diffRow');
+const btnStartEl     = document.getElementById('btnStart');
+
+function showModeSelector() {
+  bannerEl.classList.add('hidden');
+  diffRowEl.classList.add('hidden');
+  btnStartEl.classList.add('hidden');
+  // reset difficulty buttons to current selection
+  document.querySelectorAll('.dbtn').forEach(b =>
+    b.classList.toggle('active', b.dataset.d === aiDifficulty));
+  modeSelectorEl.classList.remove('hidden');
+}
+function hideModeSelector() {
+  modeSelectorEl.classList.add('hidden');
+}
+
+/* ============================================================
+   startGame — the actual reset; called when mode is chosen
+   ============================================================ */
+function startGame(mode, difficulty) {
+  // Cancel any pending AI timer from a previous game
+  clearTimeout(_aiTimer); _aiTimer = null;
+  _gameGen++;
+
+  // Reset cube
   for (const s of allStickers) {
     if (s.glyph) { s.mesh.remove(s.glyph); s.glyph = null; }
     s.mark = null;
@@ -565,16 +831,68 @@ function newGame() {
     c.rot = IDENTITY();
     syncCubie(c);
   }
-  hovered = null;
-  animating = false;
-  activeAnim = null;
+  hovered = null; animating = false; activeAnim = null;
+  showHint('');
+
+  gameMode     = mode;
+  aiDifficulty = difficulty || 'medium';
+  aiPlayer     = Math.random() < 0.5 ? 1 : 2;
   currentPlayer = 1;
-  state = 'PLACE';
-  bannerEl.classList.add('hidden');
-  updateUI();
+
+  if (gameMode === 'ai') {
+    const humanMark  = aiPlayer === 1 ? 'O' : 'X';
+    const humanFirst = aiPlayer !== 1;
+    showHint(
+      `You are ${humanMark} — ${humanFirst ? 'you move first' : 'computer moves first'}`,
+      2500
+    );
+  }
+
+  if (gameMode === 'ai' && aiPlayer === 1) {
+    // AI goes first
+    state = 'AI_THINKING';
+    updateUI();
+    _aiTimer = setTimeout(aiTakeTurn, 2200);
+  } else {
+    state = 'PLACE';
+    updateUI();
+  }
 }
+
+/* ============================================================
+   New Game — shows the mode selector
+   ============================================================ */
+function newGame() {
+  clearTimeout(_aiTimer); _aiTimer = null;
+  _gameGen++;
+  showModeSelector();
+}
+
+/* ============================================================
+   Button listeners
+   ============================================================ */
 document.getElementById('newGame').addEventListener('click', newGame);
 document.getElementById('bannerNew').addEventListener('click', newGame);
+
+document.getElementById('btn2p').addEventListener('click', () => {
+  hideModeSelector();
+  startGame('human', null);
+});
+document.getElementById('btnAI').addEventListener('click', () => {
+  diffRowEl.classList.remove('hidden');
+  btnStartEl.classList.remove('hidden');
+});
+document.querySelectorAll('.dbtn').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.dbtn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    aiDifficulty = b.dataset.d;
+  });
+});
+btnStartEl.addEventListener('click', () => {
+  hideModeSelector();
+  startGame('ai', aiDifficulty);
+});
 
 /* ============================================================
    Render loop
@@ -597,6 +915,7 @@ addEventListener('resize', () => {
 
 updateUI();
 tick();
+newGame();   // show mode selector on first load
 </script>
 </body>
 </html>
