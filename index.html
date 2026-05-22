@@ -258,6 +258,71 @@ const stickersInfo = allStickers.map(s => ({
   localNormal: s.localNormal,
 }));
 
+/* ============================================================
+   Move preview — layer highlight + directional arrows
+   ============================================================ */
+const _pvMat = new THREE.MeshStandardMaterial({
+  color: 0xffd740, emissive: 0xffd740, emissiveIntensity: 0.95,
+  transparent: true, opacity: 0.90,
+});
+function _makeArrowMesh() {
+  const g    = new THREE.Group();
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.36, 8), _pvMat);
+  stem.position.y = 0.18;
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.24, 8), _pvMat);
+  head.position.y = 0.48;
+  g.add(stem, head);
+  return g;  // tip points in +Y by default
+}
+const _pvUP = new THREE.Vector3(0, 1, 0);
+function _buildPreviewGroup(axis, layer, angle) {
+  const g = new THREE.Group();
+  const M = rotMatrix(axis, angle > 0 ? 1 : -1);
+  const R = 1.95;
+  const pts =
+    axis === 'y' ? [[R,layer,0],[-R,layer,0],[0,layer,R],[0,layer,-R]] :
+    axis === 'x' ? [[layer,R,0],[layer,-R,0],[layer,0,R],[layer,0,-R]] :
+                   [[R,0,layer],[-R,0,layer],[0,R,layer],[0,-R,layer]];
+  for (const p of pts) {
+    const q   = matVec(M, p);
+    const raw = [q[0]-p[0], q[1]-p[1], q[2]-p[2]];
+    const len = Math.hypot(raw[0], raw[1], raw[2]);
+    const dir = new THREE.Vector3(raw[0]/len, raw[1]/len, raw[2]/len);
+    const a   = _makeArrowMesh();
+    a.position.set(p[0] - dir.x * 0.3, p[1] - dir.y * 0.3, p[2] - dir.z * 0.3);
+    a.quaternion.setFromUnitVectors(_pvUP, dir);
+    g.add(a);
+  }
+  return g;
+}
+const _pvGroups = {};
+for (const [lbl, ax, ly, dr] of MOVES) {
+  const g = _buildPreviewGroup(ax, ly, dr * HALF_PI);
+  g.visible = false;
+  scene.add(g);
+  _pvGroups[lbl] = g;
+}
+let _pvActive = null;
+
+function showMovePreview(label, axis, layer) {
+  if (state !== 'MOVE') return;
+  if (_pvActive && _pvActive.label === label) return;
+  hideMovePreview();
+  const ai = AXIS_INDEX[axis];
+  for (const s of allStickers)
+    if (s.cubie.pos[ai] === layer) s.mesh.material.emissive.setHex(0x664400);
+  if (_pvGroups[label]) _pvGroups[label].visible = true;
+  _pvActive = { label, axis, layer };
+}
+function hideMovePreview() {
+  if (!_pvActive) return;
+  const ai = AXIS_INDEX[_pvActive.axis];
+  for (const s of allStickers)
+    if (s.cubie.pos[ai] === _pvActive.layer) s.mesh.material.emissive.setHex(0x000000);
+  if (_pvGroups[_pvActive.label]) _pvGroups[_pvActive.label].visible = false;
+  _pvActive = null;
+}
+
 /* ---- glyphs ---- */
 function makeGlyph(mark) {
   const g = new THREE.Group();
@@ -528,6 +593,7 @@ function finishMove() {
 }
 function doMove(axis, layer, angle) {
   if (state !== 'MOVE' || animating) return;
+  hideMovePreview();
   state = 'ANIMATING';
   updateUI();
   applyMove(axis, layer, angle, resolveTurn);
@@ -746,11 +812,14 @@ const moveBox = document.getElementById('moveButtons');
 for (const [label, axis, layer, dir] of MOVES) {
   const b = document.createElement('button');
   b.className = 'mbtn'; b.textContent = label;
-  b.addEventListener('click', () => doMove(axis, layer, dir * HALF_PI));
+  b.addEventListener('click',      () => doMove(axis, layer, dir * HALF_PI));
+  b.addEventListener('mouseenter', () => showMovePreview(label, axis, layer));
+  b.addEventListener('mouseleave', hideMovePreview);
   moveBox.appendChild(b); moveBtns.push(b);
 }
 
 function updateUI() {
+  if (state !== 'MOVE') hideMovePreview();
   const mark  = currentMark();
   const cls   = currentPlayer === 1 ? 'xcol' : 'ocol';
   const isAI  = gameMode === 'ai' && currentPlayer === aiPlayer;
@@ -816,6 +885,7 @@ function hideModeSelector() {
    startGame — the actual reset; called when mode is chosen
    ============================================================ */
 function startGame(mode, difficulty) {
+  hideMovePreview();
   // Cancel any pending AI timer from a previous game
   clearTimeout(_aiTimer); _aiTimer = null;
   _gameGen++;
