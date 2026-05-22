@@ -54,7 +54,7 @@ Five pure functions operate on it:
 | `detectWinnersLogical(s)` | `LogicalState → Set<'X'|'O'>` | Same algorithm as `detectWinners()`; reads from state instead of globals |
 | `listEmptyStickers(s)` | `LogicalState → number[]` | Indices where `marks[i] === null` |
 
-**Existing code is unchanged.** The live game's `detectWinners`, `finishMove`, and `resolveTurn` stay as-is. The AI uses the parallel pure functions exclusively for search, then calls the real `placeMark` + `doMove` to execute the chosen turn on the live board.
+**Existing code is unchanged.** The live game's `detectWinners`, `finishMove`, and `resolveTurn` stay as-is. The AI uses the parallel pure functions exclusively for search, then `aiTakeTurn` executes the chosen turn by calling raw operations (mark + glyph placement, then `applyMove`) rather than the state-transitioning wrappers — see §2.3 for the pacing sequence.
 
 ---
 
@@ -100,29 +100,29 @@ The scoring function also returns a `reason` string used by the reasoning hint (
 **Medium**
 - Always takes an immediate win.
 - Never picks an immediately losing turn when any alternative exists.
-- Among remaining turns, picks the highest heuristic score with small random noise (so it doesn't feel robotic on tied positions).
+- Among remaining turns, picks the highest heuristic score with uniform random noise in the range [−5, +5] added per candidate (so it doesn't feel robotic on tied positions; the noise is small relative to the threat-score range of roughly ±144).
 - Reasoning hint: reflects the actual reason for the choice.
 
 **Hard**
 - Same win/block logic as Medium.
-- For the top 15 non-winning candidates, simulates the opponent's best heuristic reply (2-ply look-ahead: 15 × 15 = ~225 leaf evaluations — well under 10 ms).
+- For the top 15 non-winning candidates by heuristic score, simulates the opponent's best heuristic reply (2-ply look-ahead: 15 × 15 = ~225 leaf evaluations — well under 10 ms).
 - Picks the turn that minimises the opponent's best counter-score.
 - Reasoning hint: *"Playing it safe"* when the look-ahead determined the choice; otherwise same as Medium.
 
 ### Pacing & Reasoning Hint
 
-When `resolveTurn` determines the next player is the AI, the turn proceeds in five steps:
+When `resolveTurn` determines the next player is the AI, a dedicated async function `aiTakeTurn()` manages the sequence. Crucially, state stays at `AI_THINKING` throughout — `aiTakeTurn` does **not** call `placeMark` or `doMove` (which gate on `state === 'PLACE'` / `state === 'MOVE'` and would wrongly transition state and enable buttons). Instead it calls the underlying operations directly:
 
 1. **State → `AI_THINKING`.** HUD shows *"Computer is thinking…"* with an animated `…`. All input locked. (`~700 ms` timeout scheduled.)
-2. **Mark placement.** AI calls `placeMark(sticker)` — same code path as a human tap. The glyph appears on the cube.
+2. **Mark placement.** `aiTakeTurn` directly sets `sticker.mark = aiMark` and creates + attaches the glyph mesh — the same visual steps as `placeMark`, without the state transition. The glyph appears on the cube.
 3. **Reasoning hint fades in** below the turn indicator for ~1.5 s:
    - *"Going for the win!"*
    - *"Blocking a line"*
    - *"Building a threat"*
    - *"Playing it safe"* (Hard look-ahead)
    - *(blank on Easy most of the time)*
-4. **Pause ~500 ms**, then cube move animates via existing `applyMove`.
-5. **Animation completes** → `resolveTurn()` runs as normal.
+4. **Pause ~500 ms**, then cube move animates via `applyMove(axis, layer, angle, resolveTurn)` called directly (not through `doMove`; state remains `AI_THINKING`).
+5. **Animation completes** → `resolveTurn()` runs as normal — the same function as for human turns.
 
 ---
 
